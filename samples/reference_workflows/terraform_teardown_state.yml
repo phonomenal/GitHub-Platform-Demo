@@ -1,0 +1,156 @@
+name: "Teardown TF State from Issue Close"
+
+# on: 
+#   issues:
+#     types: [closed]  
+
+jobs:
+  permission:
+    name: permission check
+    runs-on: ubuntu-latest
+    if: startsWith(github.event.issue.title, 'Terraform Request for Azure App Service') && github.actor == 'James-LeHa'
+    steps:
+    - name: check permission
+      run: echo permission pass
+
+  issue_ops_teardown:
+    name: "Verify Issue Details"
+    needs: permission
+    if: contains(github.event.issue.labels.*.name, 'terraform') 
+    runs-on: ubuntu-latest
+    outputs:
+        requesting_team: ${{ steps.set_env_values.outputs.TF_VAR_requesting_team }}
+    
+    steps:
+
+      - name: Checkout Actions Source
+        uses: actions/checkout@v2
+
+      - name: Extract Issue Demo Specification
+        id: issue_body
+        uses: peter-murray/issue-body-parser-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          issue_id: ${{ github.event.issue.number }}
+
+      - name: Set JSON Variables as Output Values
+        id: set_env_values
+        run: | 
+          for s in $(echo '${{ steps.issue_body.outputs.payload }}' | jq -r "to_entries|map(\"\(.key)::\(.value|tostring)\")|.[]" ); do
+          echo '::set-output name='"$s"''
+          done
+
+      - name: Print JSON Variables from Issue
+        run: |
+          echo "The requesting Team Name: ${{ steps.set_env_values.outputs.requesting_team }}"
+          echo "The TF Cloud State: ${{ steps.set_env_values.outputs.tf_cloud_state }}"
+      
+      - name: Check if using TF State
+        if: steps.set_env_values.outputs.tf_cloud_state == 'false'
+        run: |
+          echo "Terraform State is NOT being used. Exiting..."
+          exit 1
+
+      - name: Set Requesting Team Output Step
+        id: requesting_teamName
+        run: echo "::set-output name=requesting_teamName::${{ steps.set_env_values.outputs.requesting_team }}"
+
+
+  # terraform:
+  #   name: "📦 TF Destroy Azure App Service"
+  #   needs: issue_ops_teardown
+  #   if: contains(github.event.issue.labels.*.name, 'terraform') 
+  #   runs-on: ubuntu-latest
+  #   ### Azure Service Principal Values
+  #   env:
+  #     ARM_CLIENT_ID: ${{ secrets.TF_VAR_agent_client_id }}
+  #     ARM_CLIENT_SECRET: ${{ secrets.TF_VAR_agent_client_secret }}
+  #     ARM_SUBSCRIPTION_ID: ${{ secrets.TF_VAR_subscription_id }}
+  #     ARM_TENANT_ID: ${{ secrets.TF_VAR_tenant_id }}
+  #   defaults:
+  #     run:
+  #       working-directory: ./terraform/tf_cloud_state
+
+  #   steps:
+  #     - name: "Checkout"
+  #       uses: actions/checkout@master
+
+  #     - name: Set JSON Variables as Output Values
+  #       id: set_env_values
+  #       run: | 
+  #         for s in $(echo '${{ steps.issue_body.outputs.payload }}' | jq -r "to_entries|map(\"\(.key)::\(.value|tostring)\")|.[]" ); do
+  #         echo '::set-output name='"$s"''
+  #         done
+      
+  #     - name: "Set App Service Name"
+  #       run: echo "TF_VAR_app_service_name=$TF_VAR_app_service_name" >> $GITHUB_ENV
+        
+  #     - run: echo $TF_VAR_app_service_name
+
+  #     - name: "Setup Terraform"
+  #       uses: hashicorp/setup-terraform@v1.2.1
+  #       with:
+  #         terraform_version: 0.14.0
+  #         cli_config_credentials_token: ${{ secrets.tf_token }}
+
+  #     - name: Terraform Init
+  #       id: init
+  #       run: terraform init
+        
+  #     - name: Terraform Destroy
+  #       id: destroy
+  #       run: |
+  #         terraform destroy -auto-approve
+
+  #     - name: Comment TF Apply Summary Success
+  #       uses: actions/github-script@v3.0.0
+  #       if: success()
+  #       env:
+  #         PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+  #       with:
+  #         result-encoding: string
+  #         github-token: ${{ secrets.GITHUB_TOKEN }}
+  #         script: |
+  #           const { TF_VAR_requesting_team, TF_VAR_app_service_name } = process.env;
+  #           const output = `#### Terraform Destroy 💣\`${{ steps.destroy.outcome }}\`
+
+  #           #### Environment Summary
+
+  #           * __Azure Resource Group__: ${TF_VAR_requesting_team}-rg
+  #           * __Azure App Service Plan__: ${TF_VAR_requesting_team}-web-appservice
+  #           * __Azure App Service Name__: ${TF_VAR_app_service_name}
+  #           * __Actions Run:__ https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+  #           *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Working Directory: \`${{ env.tf_actions_working_dir }}\`, Workflow: \`${{ github.workflow }}\`*`;
+              
+  #           github.issues.createComment({
+  #             issue_number: context.issue.number,
+  #             owner: context.repo.owner,
+  #             repo: context.repo.repo,
+  #             body: output
+  #           })
+
+  cleanup-envs-and-deployments:
+    name: Cleanup Env and Deployments
+    runs-on: ubuntu-latest
+    needs: [issue_ops_teardown]
+
+    strategy:
+      matrix:
+        env: ['UAT', 'STAGING']
+    
+    steps:
+      - name: Delete Env
+        uses: satak/webrequest-action@master
+        with:
+          url: https://api.github.com/repos/octodemo/GitHub-Platform-Demo/environments/${{ needs.issue_ops_teardown.outputs.requesting_team }}-${{ matrix.env }}
+          method: DELETE
+          headers: '{"Authorization": "Bearer ${{ secrets.GHCR_PASSWORD }}"}'
+
+      - name: Delete Deployment
+        uses: strumwolf/delete-deployment-environment@v1.1.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          environment: ${{ needs.issue_ops_teardown.outputs.requesting_team }}-${{ matrix.env }}    
+
+  

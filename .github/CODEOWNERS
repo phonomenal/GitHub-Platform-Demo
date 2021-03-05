@@ -1,0 +1,5 @@
+# When someone opens a pull request that 
+# modifies .yml files
+# owner(s) will be requested for a review.
+*.yml    @James-LeHa
+src/views/*    @octodemo/github-platform-reviewers

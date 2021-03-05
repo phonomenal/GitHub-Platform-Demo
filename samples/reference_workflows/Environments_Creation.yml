@@ -1,0 +1,45 @@
+name: Create environment
+
+# Controls when the action will run. 
+on:
+  workflow_dispatch:
+    inputs:
+      environment-name: 
+        description: 'Name of Environment to generate'
+        required: true
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+
+  environments-deployment:
+    name: "🌲 Create GitHub Environments"
+    runs-on: ubuntu-latest
+
+    #   REQUEST_BODY: |
+    #     {
+    #       "wait_timer": 42,
+    #       "reviewers": [ {"type": "User", "id": 62304682} ]
+    #     }
+    # steps:
+    # - uses: octokit/request-action@v2.x
+    #   id: post_create_environment
+    #   with:
+    #     route: PUT /repos/${{ github.repository	}}/environments/${{ github.event.inputs.environment-name }}
+    #         # As JSON
+    #     body: |
+    #       |
+    #       ${{ env.REQUEST_BODY }}
+    #   env:
+    #     GITHUB_TOKEN: ${{ secrets.GHCR_PASSWORD }}
+    # - run: "echo latest release: ${{ steps.post_create_environment.outputs.data }}"
+    steps:
+    - uses: satak/webrequest-action@master
+      with:
+        url: https://api.github.com/repos/octodemo/GitHub-Platform-Demo/environments/${{ github.event.inputs.environment-name }}
+        method: PUT
+        payload: |
+          {
+            "wait_timer": 3,
+            "reviewers": [ {"type": "User", "id": 62304682} ]
+          }
+        headers: '{"Authorization": "Bearer ${{ secrets.GHCR_PASSWORD }}"}'

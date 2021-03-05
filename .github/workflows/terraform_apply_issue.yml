@@ -1,0 +1,281 @@
+name: "Terraform Deploy from Issue"
+on:
+  issue_comment: 
+  
+env:
+  tf_actions_working_dir_state: ./terraform/tf_cloud_state
+  tf_actions_working_dir_stateless: ./terraform/tf_stateless
+  environment_reviewer_type: Team
+  environment_reviewer_id: 4568357
+
+
+
+jobs:
+
+  issue_ops:
+    name: "Extract Issue Ops Values From Issue"
+    if: |
+      (contains(github.event.issue.labels.*.name, 'terraform')  &&
+      contains(github.event.comment.body,'/approved'))
+    runs-on: ubuntu-latest
+    outputs:
+        requesting_team: ${{ steps.set_env_values.outputs.TF_VAR_requesting_team }}
+        app_service_name: ${{ steps.set_env_values.outputs.TF_VAR_app_service_name }}
+        location: ${{ steps.set_env_values.outputs.TF_VAR_location }}
+        sku_size: ${{ steps.set_env_values.outputs.TF_VAR_sku_size }}
+        sku_tier: ${{ steps.set_env_values.outputs.TF_VAR_sku_tier }}
+        json_body_payload: ${{ steps.issue_body.outputs.payload }}
+        tf_cloud_state: ${{ steps.set_env_values.outputs.tf_cloud_state }}
+        tf_working_dir: ${{ steps.tf_state_dir.outputs.tf_working_dir }}
+        output_appServiceName: ${{ steps.app_serviceName.outputs.app_serviceName }}
+        output_requestingTeamName: ${{ steps.requesting_teamName.outputs.requesting_teamName }}
+    
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@master
+
+      ## Issue Ops - Extract information from JSON - Local Action
+      - name: Extract Issue Demo Specification
+        id: issue_body
+        uses: peter-murray/issue-body-parser-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          issue_id: ${{ github.event.issue.number }}
+      
+      - name: Set JSON Variables as Output Values
+        id: set_env_values
+        run: | 
+          for s in $(echo '${{ steps.issue_body.outputs.payload }}' | jq -r "to_entries|map(\"\(.key)::\(.value|tostring)\")|.[]" ); do
+          echo '::set-output name='"$s"''
+          done
+
+      - name: Print JSON Variables from Issue
+        run: |
+          echo "The requesting Team Name: ${{ steps.set_env_values.outputs.requesting_team }}"
+          echo "The requested App Service Name Size: ${{ steps.set_env_values.outputs.app_service_name }}"
+          echo "The requested Location: ${{ steps.set_env_values.outputs.location }}"
+          echo "The requested SKU Size: ${{ steps.set_env_values.outputs.sku_size }}"
+          echo "The requested SKU Tier: ${{ steps.set_env_values.outputs.sku_tier }}"
+          echo "The requested TF Cloud State: ${{ steps.set_env_values.outputs.tf_cloud_state }}"
+
+      - name: Set App Service Output Step
+        id: app_serviceName
+        run: echo "::set-output name=app_serviceName::${{ steps.set_env_values.outputs.app_service_name }}"
+
+      - name: Set Requesting Team Output Step
+        id: requesting_teamName
+        run: echo "::set-output name=requesting_teamName::${{ steps.set_env_values.outputs.requesting_team }}"
+  
+      - name: Set TF Directory Cloud State
+        id: tf_state_dir
+        run: |
+          if [[ ${{ steps.set_env_values.outputs.tf_cloud_state }} == false ]]; 
+          then
+            echo "::set-output name=tf_working_dir::${{ env.tf_actions_working_dir_stateless }}"
+          fi
+
+          if [[ ${{ steps.set_env_values.outputs.tf_cloud_state }} == true ]]; 
+          then
+            echo "::set-output name=tf_working_dir::${{ env.tf_actions_working_dir_state }}"
+          fi
+
+      - run: echo ${{ steps.tf_state_dir.outputs.tf_working_dir }}
+
+  terraform:
+    name: "📦 TF Deploy Azure App Service"
+    needs: issue_ops
+    if: contains(github.event.issue.labels.*.name, 'terraform') 
+    runs-on: ubuntu-latest
+    ### Azure Service Principal Values
+    env:
+      ARM_CLIENT_ID: ${{ secrets.TF_VAR_agent_client_id }}
+      ARM_CLIENT_SECRET: ${{ secrets.TF_VAR_agent_client_secret }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.TF_VAR_subscription_id }}
+      ARM_TENANT_ID: ${{ secrets.TF_VAR_tenant_id }}
+    defaults:
+      run:
+        working-directory: ${{ needs.issue_ops.outputs.tf_working_dir }}
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@master
+
+      - name: Set JSON Variables as ENV Variables
+        id: set_env_values
+        run: | 
+          for s in $(echo '${{ needs.issue_ops.outputs.json_body_payload }}' | jq -r "to_entries|map(\"\(.key)=\(.value|tostring)\")|.[]" ); do
+          echo "TF_VAR_"$s >> $GITHUB_ENV 
+          done
+      
+      - name: "Set App Service Name"
+        run: echo "TF_VAR_app_service_name=$TF_VAR_app_service_name" >> $GITHUB_ENV
+        
+      - run: echo $TF_VAR_app_service_name
+      
+      - name: "Set Registry User Name"
+        run: echo "TF_VAR_registry_username=${{ github.actor }}" >> $GITHUB_ENV
+        
+      - run: echo $TF_VAR_registry_username
+      
+      - name: "Set Registry Password"
+        run: echo "TF_VAR_registry_password=${{ secrets.GHCR_PASSWORD }}" >> $GITHUB_ENV
+        
+      - run: echo $TF_VAR_registry_password
+        
+      - name: "Setup Terraform"
+        uses: hashicorp/setup-terraform@v1.2.1
+        with:
+          terraform_version: 0.14.0
+          cli_config_credentials_token: ${{ secrets.tf_token }}
+
+      - name: Terraform fmt
+        id: fmt
+        run: |
+          terraform fmt -check
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color
+        continue-on-error: false
+      
+      - name: Comment TF Plan Summary
+        uses: actions/github-script@v3.0.0
+        env:
+          PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+        with:
+          result-encoding: string
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+            #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+            #### Terraform Validation 🤖${{ steps.validate.outputs.stdout }}
+            #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+            
+            <details><summary>Show Plan</summary>
+            
+            \`\`\`${process.env.PLAN}\`\`\`
+            
+            </details>
+            
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Working Directory: \`${{ needs.issue_ops.outputs.tf_working_dir }}\`, Workflow: \`${{ github.workflow }}\`*`;
+              
+            github.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+      
+      - name: Terraform Apply
+        id: apply
+        run: terraform apply -input=false -auto-approve
+        continue-on-error: false
+      
+      - name: Comment TF Apply Summary Success
+        uses: actions/github-script@v3.0.0
+        if: success()
+        env:
+          PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+        with:
+          result-encoding: string
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { TF_VAR_requesting_team, TF_VAR_app_service_name } = process.env;
+            const output = `#### Terraform Apply 🚀\`${{ steps.apply.outcome }}\`
+
+            #### Environment Summary
+
+            * __Azure Resource Group__: ${TF_VAR_requesting_team}-rg
+            * __Azure App Service Plan__: ${TF_VAR_requesting_team}-web-appservice
+            * __Azure App Service Name__: ${TF_VAR_app_service_name}
+            * __Actions Run:__ https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Working Directory: \`${{ needs.issue_ops.outputs.tf_working_dir }}\`, Workflow: \`${{ github.workflow }}\`*`;
+              
+            github.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+      - name: Comment TF Apply Summary Failure
+        uses: actions/github-script@v3.0.0
+        if: failure()
+        env:
+          PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+        with:
+          result-encoding: string
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { TF_VAR_requesting_team, TF_VAR_app_service_name } = process.env;
+            const output = `#### Terraform Apply ❌\`${{ steps.apply.outcome }}\`
+
+            #### Environment Summary
+            
+            * __Azure Resource Group__: ${TF_VAR_requesting_team}-rg
+            * __Azure App Service Plan__: ${TF_VAR_requesting_team}-web-appservice
+            * __Azure App Service Name__: ${TF_VAR_app_service_name}
+            * __Actions Run:__ https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Working Directory: \`${{ env.tf_actions_working_dir }}\`, Workflow: \`${{ github.workflow }}\`*`;
+              
+            github.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+  environments-deployment:
+    name: "🌲 Create GitHub Environments"
+    runs-on: ubuntu-latest
+    needs: [issue_ops, terraform]
+
+    steps:
+    - name: Create UAT Env
+      uses: satak/webrequest-action@master
+      with:
+        url: https://api.github.com/repos/${{ github.repository	}}/environments/${{needs.issue_ops.outputs.output_requestingTeamName}}-UAT
+        method: PUT
+        headers: '{"Authorization": "Bearer ${{ secrets.GHCR_PASSWORD }}"}'
+    - name: Create STAGING Env
+      uses: satak/webrequest-action@master
+      with:
+        url: https://api.github.com/repos/${{ github.repository	}}/environments/${{needs.issue_ops.outputs.output_requestingTeamName}}-STAGING
+        method: PUT
+        payload: |
+          {
+            "wait_timer": 3,
+            "reviewers": [ {"type": "${{ env.environment_reviewer_type }}", "id": ${{ env.environment_reviewer_id }}} ]
+          }
+        headers: '{"Authorization": "Bearer ${{ secrets.GHCR_PASSWORD }}"}'
+  
+    - name: Comment Environment Creation Success
+      uses: actions/github-script@v3.0.0
+      if: success()
+      with:
+        result-encoding: string
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const output = `#### GitHub Environment Summary 🌲
+
+          * __UAT Environment Created__: ${{needs.issue_ops.outputs.output_requestingTeamName}}-UAT
+          * __STAGING Environment Created__: ${{needs.issue_ops.outputs.output_requestingTeamName}}-STAGING
+          
+          * Please create Environment Secrets for the respective *AZURE_WEBAPP_PUBLISH_PROFILE*`;
+            
+          github.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          })                  
