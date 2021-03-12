@@ -5,6 +5,7 @@
 # Welcome
 
 As feature in Infocus Series 2021 - [Automating CI/CD and security on a single platform with GitHub Enterprise](https://infocus.github.com/sessions/automating-ci-cd-and-security-on-a-single-platform-with-github-enterprise/)
+- [YouTube Recording](https://www.youtube.com/watch?v=ubpDN-ol4dg&t=3642s)
 
 This nodejs app will allow you to search for any GitHub user by their handle!
 
