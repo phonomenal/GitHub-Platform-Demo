@@ -1,4 +1,6 @@
 <p align="center">
+
+[![CIS](https://app.soluble.cloud/api/v1/public/badges/c6367ecf-c3b4-44f9-a037-a5cccfc6da88.svg)](https://app.soluble.cloud/repos/details/github.com/james-leha/github-platform-demo)  [![IaC](https://app.soluble.cloud/api/v1/public/badges/b96dbc70-0d4c-4b7c-88e4-32c0f8f36d72.svg)](https://app.soluble.cloud/repos/details/github.com/james-leha/github-platform-demo)  [![HIPAA](https://app.soluble.cloud/api/v1/public/badges/cec28e56-75ab-498d-9165-04dccdf84aa3.svg)](https://app.soluble.cloud/repos/details/github.com/james-leha/github-platform-demo)  
   <img src=".github/img/github_infocus.png" height=200  >
 </p>
 
